@@ -143,7 +143,6 @@ Here are some example natural language queries you can try:
 - `src/langchain_integration.py`: LangChain integration for LLM providers
 - `src/cli.py`: Command-line interface
 - `src/example_usage.py`: Example usage of the query generator
-- `src/scalyr_query_builder.py`: Legacy query builder (for backward compatibility)
 
 ## How It Works
 
