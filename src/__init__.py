@@ -1,0 +1,3 @@
+"""
+Scalyr Query Builder package
+"""
