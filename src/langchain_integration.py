@@ -208,7 +208,8 @@ class LangChainLLM:
         Returns:
             Prompt string
         """
-        return """
+        # Start with the documentation
+        prompt_parts = ["""
 # Scalyr PowerQuery Documentation
 
 PowerQuery is a powerful query language for analyzing log data in Scalyr. It uses a pipeline syntax with commands separated by the pipe character (|).
@@ -216,7 +217,7 @@ PowerQuery is a powerful query language for analyzing log data in Scalyr. It use
 ## Basic Syntax
 
 ```
-dataset="dataset_name"
+serverHost="source_name"
 | filter expression
 | command1 arg1, arg2
 | command2 arg1, arg2
@@ -245,31 +246,34 @@ dataset="dataset_name"
 - Logical operators: `&&` (AND), `||` (OR), `!` (NOT)
 - Contains: `contains(field, "text")`
 - Matches: `matches(field, "regex")`
+- Nested fields: Use dot notation (e.g., `data.req.path`)
 
 ## Examples
 
 Count HTTP status codes:
 ```
-dataset="accesslog"
-| filter statusCode >= 400
-| group statusCode
+source="accesslog"
+| filter data.status >= 400
+| group data.status
 | count
 ```
 
 Calculate average response time by endpoint:
 ```
-dataset="accesslog"
-| group uriPath
-| avg(responseTime) as avgTime
+source="accesslog"
+| group data.req.path
+| avg(data.duration) as avgTime
 | sort -avgTime
 | limit 10
 ```
 
 Find error rates over time:
 ```
-dataset="application_logs"
-| filter level == "ERROR"
+source="application_logs"
+| filter data.level == "ERROR"
 | timeslice 1h
+| group _timeslice
+| count as errorCount
 ```
 
 ## Task
@@ -284,18 +288,36 @@ Available fields in the schema:
 
 Please provide:
 1. A simple filter query if applicable
-2. A more sophisticated power query
+2. A more sophisticated power query (format each command on a new line with the | character at the start)
 3. An explanation of what the query does
-4. Suggested visualizations for the results
 
 Format your response as a JSON object with the following structure:
 {{
     "filter_query": "optional simple filter query",
-    "power_query": "power query with full syntax",
-    "explanation": "explanation of what the query does",
-    "visualization_suggestions": ["suggestion1", "suggestion2"]
+    "power_query": "power query with full syntax (one command per line)",
+    "explanation": "explanation of what the query does"
 }}
-"""
+"""]
+        
+        # Add schema information
+        fields = []
+        if isinstance(schema_info, dict):
+            for field_name, field_info in schema_info.items():
+                if isinstance(field_info, dict):
+                    fields.append(f"- {field_name}: {field_info.get('type', 'string')}")
+                else:
+                    fields.append(f"- {field_name}")
+        elif isinstance(schema_info, list):
+            for field_name in schema_info:
+                fields.append(f"- {field_name}")
+        
+        prompt_parts.append("\n".join(fields))
+        
+        # Add dataset information if provided
+        if dataset:
+            prompt_parts.append(f"\nSource: {dataset}")
+        
+        return "\n".join(prompt_parts)
     
     def _parse_result(self, result: str) -> Dict[str, Any]:
         """
@@ -313,10 +335,22 @@ Format your response as a JSON object with the following structure:
             json_match = re.search(r'```(?:json)?\n(.*?)\n```', result, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
-                return json.loads(json_str)
+                parsed = json.loads(json_str)
+                
+                # Format power query with proper line breaks
+                if "power_query" in parsed:
+                    parsed["power_query"] = self._format_power_query(parsed["power_query"])
+                
+                return parsed
             
             # If no JSON block found, try to parse the entire response
-            return json.loads(result)
+            parsed = json.loads(result)
+            
+            # Format power query with proper line breaks
+            if "power_query" in parsed:
+                parsed["power_query"] = self._format_power_query(parsed["power_query"])
+            
+            return parsed
             
         except json.JSONDecodeError:
             # If JSON parsing fails, extract parts manually
@@ -333,20 +367,38 @@ Format your response as a JSON object with the following structure:
             # Try to extract power query
             power_match = re.search(r'power[_\s]+query:?\s*(.+?)(?:\n\n|\n[a-z])', result, re.IGNORECASE | re.DOTALL)
             if power_match:
-                parsed_result["power_query"] = power_match.group(1).strip()
+                parsed_result["power_query"] = self._format_power_query(power_match.group(1).strip())
             
             # Try to extract explanation
             explanation_match = re.search(r'explanation:?\s*(.+?)(?:\n\n|\n[a-z])', result, re.IGNORECASE | re.DOTALL)
             if explanation_match:
                 parsed_result["explanation"] = explanation_match.group(1).strip()
             
-            # Try to extract visualization suggestions
-            viz_match = re.search(r'visualization[_\s]+suggestions:?\s*\[(.*?)\]', result, re.IGNORECASE | re.DOTALL)
-            if viz_match:
-                suggestions = viz_match.group(1).strip()
-                parsed_result["visualization_suggestions"] = [s.strip('"\'') for s in suggestions.split(',') if s.strip()]
-            
             return parsed_result
+    
+    def _format_power_query(self, query: str) -> str:
+        """
+        Format a power query with proper line breaks
+        
+        Args:
+            query: Power query string
+            
+        Returns:
+            Formatted power query
+        """
+        # Split by pipe character
+        parts = query.split("|")
+        
+        # Format each part
+        formatted_parts = []
+        for i, part in enumerate(parts):
+            part = part.strip()
+            if i == 0:
+                formatted_parts.append(part)
+            else:
+                formatted_parts.append(f"| {part}")
+        
+        return "\n".join(formatted_parts)
 
 
 def create_llm(provider: str = "openai", model_name: Optional[str] = None) -> LangChainLLM:

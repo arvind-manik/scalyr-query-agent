@@ -7,7 +7,12 @@ This module provides a client for interacting with the Scalyr API.
 import json
 import os
 import requests
+import logging
 from typing import Dict, List, Any, Optional, Union
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class ScalyrAPIClient:
@@ -30,7 +35,7 @@ class ScalyrAPIClient:
         
         # Check if API token is available
         if not self.api_token:
-            print("Warning: No Scalyr API token provided. Set SCALYR_API_TOKEN environment variable or pass api_token.")
+            logger.warning("No Scalyr API token provided. Set SCALYR_API_TOKEN environment variable or pass api_token.")
     
     def get_fields(self, dataset: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -42,6 +47,16 @@ class ScalyrAPIClient:
         Returns:
             Dictionary of field information
         """
+        # First, get server hosts for the dataset
+        server_hosts = self.get_field_values("serverHost", dataset)
+        if not server_hosts:
+            logger.warning(f"No server hosts found for dataset {dataset}")
+            return {}
+        
+        # Use the first server host as default
+        server_host = server_hosts[0]
+        logger.info(f"Using server host: {server_host}")
+        
         # Endpoint for field information
         endpoint = f"{self.server_url}/api/facetQuery"
         
@@ -51,11 +66,12 @@ class ScalyrAPIClient:
             "queryType": "facet",
             "field": "*",
             "startTime": "1d",
-            "maxCount": 100
+            "maxCount": 100,
+            "filter": f'serverHost="{server_host}"'
         }
         
-        if dataset:
-            payload["filter"] = f'$dataset="{dataset}"'
+        logger.info(f"Fetching fields from Scalyr API: {endpoint}")
+        logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
         
         try:
             # Make the API request
@@ -64,10 +80,11 @@ class ScalyrAPIClient:
             
             # Parse the response
             data = response.json()
+            logger.debug(f"API response: {json.dumps(data, indent=2)}")
             
             # Check for errors
             if data.get("status") != "success":
-                print(f"Error: {data.get('message', 'Unknown error')}")
+                logger.error(f"Error from Scalyr API: {data.get('message', 'Unknown error')}")
                 return {}
             
             # Extract fields from values
@@ -79,10 +96,17 @@ class ScalyrAPIClient:
                     "count": item.get("count", 0)
                 }
             
+            # Add server host information
+            fields["serverHost"] = {
+                "type": "string",
+                "values": server_hosts
+            }
+            
+            logger.info(f"Found {len(fields)} fields")
             return fields
             
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching fields: {e}")
+            logger.error(f"Error fetching fields: {e}")
             return {}
     
     def get_datasets(self) -> List[str]:
@@ -99,10 +123,13 @@ class ScalyrAPIClient:
         payload = {
             "token": self.api_token,
             "queryType": "facet",
-            "field": "dataset",
+            "field": "source",
             "startTime": "1d",
             "maxCount": 100
         }
+        
+        logger.info(f"Fetching datasets from Scalyr API: {endpoint}")
+        logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
         
         try:
             # Make the API request
@@ -111,18 +138,20 @@ class ScalyrAPIClient:
             
             # Parse the response
             data = response.json()
+            logger.debug(f"API response: {json.dumps(data, indent=2)}")
             
             # Check for errors
             if data.get("status") != "success":
-                print(f"Error: {data.get('message', 'Unknown error')}")
+                logger.error(f"Error from Scalyr API: {data.get('message', 'Unknown error')}")
                 return []
             
             # Extract dataset names from values
             datasets = [item["value"] for item in data.get("values", [])]
+            logger.info(f"Found {len(datasets)} datasets")
             return datasets
             
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching datasets: {e}")
+            logger.error(f"Error fetching datasets: {e}")
             return []
     
     def execute_query(self, query: str, start_time: str = "1h", end_time: Optional[str] = None) -> Dict[str, Any]:
@@ -150,6 +179,9 @@ class ScalyrAPIClient:
         if end_time:
             payload["endTime"] = end_time
         
+        logger.info(f"Executing PowerQuery: {query}")
+        logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
+        
         try:
             # Make the API request
             response = requests.post(endpoint, json=payload)
@@ -157,16 +189,17 @@ class ScalyrAPIClient:
             
             # Parse the response
             data = response.json()
+            logger.debug(f"API response: {json.dumps(data, indent=2)}")
             
             # Check for errors
             if data.get("status") != "success":
-                print(f"Error: {data.get('message', 'Unknown error')}")
+                logger.error(f"Error from Scalyr API: {data.get('message', 'Unknown error')}")
                 return {}
             
             return data
             
         except requests.exceptions.RequestException as e:
-            print(f"Error executing query: {e}")
+            logger.error(f"Error executing query: {e}")
             return {}
     
     def execute_filter_query(self, filter_expression: str, start_time: str = "1h", end_time: Optional[str] = None, 
@@ -191,11 +224,15 @@ class ScalyrAPIClient:
             "token": self.api_token,
             "filter": filter_expression,
             "startTime": start_time,
-            "maxCount": max_count
+            "maxCount": max_count,
+            "columns": ["timestamp", "message", "data"]
         }
         
         if end_time:
             payload["endTime"] = end_time
+        
+        logger.info(f"Executing filter query: {filter_expression}")
+        logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
         
         try:
             # Make the API request
@@ -204,16 +241,17 @@ class ScalyrAPIClient:
             
             # Parse the response
             data = response.json()
+            logger.debug(f"API response: {json.dumps(data, indent=2)}")
             
             # Check for errors
             if data.get("status") != "success":
-                print(f"Error: {data.get('message', 'Unknown error')}")
+                logger.error(f"Error from Scalyr API: {data.get('message', 'Unknown error')}")
                 return {}
             
             return data
             
         except requests.exceptions.RequestException as e:
-            print(f"Error executing filter query: {e}")
+            logger.error(f"Error executing filter query: {e}")
             return {}
     
     def get_sample_logs(self, dataset: Optional[str] = None, max_count: int = 10) -> List[Dict[str, Any]]:
@@ -230,7 +268,7 @@ class ScalyrAPIClient:
         # Prepare filter expression
         filter_expression = ""
         if dataset:
-            filter_expression = f'$dataset="{dataset}"'
+            filter_expression = f'$source="{dataset}"'
         
         # Execute the query
         result = self.execute_filter_query(filter_expression, max_count=max_count)
@@ -263,7 +301,10 @@ class ScalyrAPIClient:
         }
         
         if dataset:
-            payload["filter"] = f'$dataset="{dataset}"'
+            payload["filter"] = f'source="{dataset}"'
+        
+        logger.info(f"Fetching values for field {field} from Scalyr API: {endpoint}")
+        logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
         
         try:
             # Make the API request
@@ -272,16 +313,18 @@ class ScalyrAPIClient:
             
             # Parse the response
             data = response.json()
+            logger.debug(f"API response: {json.dumps(data, indent=2)}")
             
             # Check for errors
             if data.get("status") != "success":
-                print(f"Error: {data.get('message', 'Unknown error')}")
+                logger.error(f"Error from Scalyr API: {data.get('message', 'Unknown error')}")
                 return []
             
             # Extract values
             values = [item["value"] for item in data.get("values", [])]
+            logger.info(f"Found {len(values)} values for field {field}")
             return values
             
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching field values: {e}")
+            logger.error(f"Error fetching field values: {e}")
             return []
