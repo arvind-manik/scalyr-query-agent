@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List, Union
 try:
     from langchain.prompts import PromptTemplate
     from langchain.output_parsers import PydanticOutputParser
-    from langchain.pydantic_v1 import BaseModel, Field
+    from pydantic import BaseModel, Field
     from langchain.schema import StrOutputParser
     langchain_available = True
 except ImportError:
@@ -152,7 +152,12 @@ class LangChainLLM:
         try:
             # Create the prompt
             prompt_text = self._create_prompt(query_text, schema_info, dataset)
-            prompt = PromptTemplate.from_template(prompt_text)
+            
+            # Create the prompt template with the correct variables
+            prompt = PromptTemplate(
+                template=prompt_text,
+                input_variables=["query_text", "fields", "dataset_info"]
+            )
             
             # Create the output parser
             output_parser = PydanticOutputParser(pydantic_object=ScalyrQueryOutput)
@@ -160,8 +165,26 @@ class LangChainLLM:
             # Create the chain
             chain = prompt | self.llm | StrOutputParser()
             
-            # Run the chain
-            result = chain.invoke({})
+            # Prepare the input variables
+            fields = []
+            if isinstance(schema_info, dict):
+                for field_name, field_info in schema_info.items():
+                    if isinstance(field_info, dict):
+                        fields.append(f"- {field_name}: {field_info.get('type', 'string')}")
+                    else:
+                        fields.append(f"- {field_name}")
+            elif isinstance(schema_info, list):
+                for field_name in schema_info:
+                    fields.append(f"- {field_name}")
+            
+            dataset_info = f"Dataset: {dataset}" if dataset else ""
+            
+            # Run the chain with all required variables
+            result = chain.invoke({
+                "query_text": query_text,
+                "fields": "\n".join(fields),
+                "dataset_info": dataset_info
+            })
             
             # Parse the result
             return self._parse_result(result)
@@ -185,8 +208,7 @@ class LangChainLLM:
         Returns:
             Prompt string
         """
-        # Start with the documentation
-        prompt_parts = ["""
+        return """
 # Scalyr PowerQuery Documentation
 
 PowerQuery is a powerful query language for analyzing log data in Scalyr. It uses a pipeline syntax with commands separated by the pipe character (|).
@@ -248,57 +270,32 @@ Find error rates over time:
 dataset="application_logs"
 | filter level == "ERROR"
 | timeslice 1h
-| group _timeslice
-| count as errorCount
 ```
-"""]
-        
-        # Add schema information
-        prompt_parts.append("\n## Available Datasets\n")
-        if "datasets" in schema_info and schema_info["datasets"]:
-            for ds in schema_info["datasets"]:
-                prompt_parts.append(f"- {ds}")
-        else:
-            prompt_parts.append("- No datasets available")
-        
-        # Add field information
-        prompt_parts.append("\n## Available Fields\n")
-        if "fields" in schema_info and schema_info["fields"]:
-            for field_name, field_info in schema_info["fields"].items():
-                prompt_parts.append(f"- {field_name}")
-        else:
-            prompt_parts.append("- No field information available")
-        
-        # Add sample logs if available
-        if "sample_logs" in schema_info and schema_info["sample_logs"]:
-            prompt_parts.append("\n## Sample Logs\n")
-            prompt_parts.append("```json")
-            for i, log in enumerate(schema_info["sample_logs"]):
-                if i > 0:
-                    prompt_parts.append("---")
-                prompt_parts.append(json.dumps(log, indent=2))
-            prompt_parts.append("```")
-        
-        # Add instructions
-        prompt_parts.append("\n## Instructions\n")
-        prompt_parts.append("Generate a Scalyr query for the following request:")
-        prompt_parts.append(f"\"{query_text}\"")
-        
-        if dataset:
-            prompt_parts.append(f"\nUse the dataset \"{dataset}\" for this query.")
-        
-        prompt_parts.append("\nProvide your response in the following JSON format:")
-        prompt_parts.append("```json")
-        prompt_parts.append("""{
-  "filter_query": "Simple filter query if applicable",
-  "power_query": "Power query with full syntax",
-  "explanation": "Explanation of what the query does",
-  "visualization_suggestions": ["Suggestion 1", "Suggestion 2"]
-}""")
-        prompt_parts.append("```")
-        
-        # Join all parts
-        return "\n".join(prompt_parts)
+
+## Task
+
+Generate a Scalyr query for the following request:
+{query_text}
+
+Available fields in the schema:
+{fields}
+
+{dataset_info}
+
+Please provide:
+1. A simple filter query if applicable
+2. A more sophisticated power query
+3. An explanation of what the query does
+4. Suggested visualizations for the results
+
+Format your response as a JSON object with the following structure:
+{{
+    "filter_query": "optional simple filter query",
+    "power_query": "power query with full syntax",
+    "explanation": "explanation of what the query does",
+    "visualization_suggestions": ["suggestion1", "suggestion2"]
+}}
+"""
     
     def _parse_result(self, result: str) -> Dict[str, Any]:
         """
@@ -337,6 +334,17 @@ dataset="application_logs"
             power_match = re.search(r'power[_\s]+query:?\s*(.+?)(?:\n\n|\n[a-z])', result, re.IGNORECASE | re.DOTALL)
             if power_match:
                 parsed_result["power_query"] = power_match.group(1).strip()
+            
+            # Try to extract explanation
+            explanation_match = re.search(r'explanation:?\s*(.+?)(?:\n\n|\n[a-z])', result, re.IGNORECASE | re.DOTALL)
+            if explanation_match:
+                parsed_result["explanation"] = explanation_match.group(1).strip()
+            
+            # Try to extract visualization suggestions
+            viz_match = re.search(r'visualization[_\s]+suggestions:?\s*\[(.*?)\]', result, re.IGNORECASE | re.DOTALL)
+            if viz_match:
+                suggestions = viz_match.group(1).strip()
+                parsed_result["visualization_suggestions"] = [s.strip('"\'') for s in suggestions.split(',') if s.strip()]
             
             return parsed_result
 

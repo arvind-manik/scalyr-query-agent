@@ -43,15 +43,19 @@ class ScalyrAPIClient:
             Dictionary of field information
         """
         # Endpoint for field information
-        endpoint = f"{self.server_url}/api/fields"
+        endpoint = f"{self.server_url}/api/facetQuery"
         
         # Prepare request payload
         payload = {
-            "token": self.api_token
+            "token": self.api_token,
+            "queryType": "facet",
+            "field": "*",
+            "startTime": "1d",
+            "maxCount": 100
         }
         
         if dataset:
-            payload["dataset"] = dataset
+            payload["filter"] = f'$dataset="{dataset}"'
         
         try:
             # Make the API request
@@ -66,7 +70,16 @@ class ScalyrAPIClient:
                 print(f"Error: {data.get('message', 'Unknown error')}")
                 return {}
             
-            return data.get("fields", {})
+            # Extract fields from values
+            fields = {}
+            for item in data.get("values", []):
+                field_name = item["value"]
+                fields[field_name] = {
+                    "type": "string",  # Default type
+                    "count": item.get("count", 0)
+                }
+            
+            return fields
             
         except requests.exceptions.RequestException as e:
             print(f"Error fetching fields: {e}")

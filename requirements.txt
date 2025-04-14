@@ -3,6 +3,7 @@ dataclasses>=0.6
 typing>=3.7.4
 enum34>=1.1.10
 requests>=2.25.0
+python-dotenv>=1.0.0
 
 # LangChain and LLM integration
 langchain>=0.1.0

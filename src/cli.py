@@ -9,9 +9,13 @@ import json
 import os
 import sys
 from typing import Dict, Any, Optional
+from dotenv import load_dotenv
 
 from scalyr_api_client import ScalyrAPIClient
 from scalyr_query_generator import ScalyrQueryGenerator
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def parse_args():
@@ -38,8 +42,8 @@ def parse_args():
     parser.add_argument(
         "--llm",
         choices=["gemini", "openai", "anthropic", "none"],
-        default="gemini",
-        help="LLM provider to use (default: gemini)"
+        default="openai",
+        help="LLM provider to use (default: openai)"
     )
 
     parser.add_argument(
@@ -233,14 +237,27 @@ def main():
     """Main entry point for the CLI"""
     args = parse_args()
 
+    # Get API token and server URL from environment or command line
+    api_token = args.api_token or os.getenv("SCALYR_API_TOKEN")
+    server_url = args.server_url or os.getenv("SCALYR_SERVER_URL")
+
+    if not api_token:
+        print("Error: No API token provided. Set SCALYR_API_TOKEN in .env file or use --api-token")
+        sys.exit(1)
+
     # Create API client
-    api_client = ScalyrAPIClient(api_token=args.api_token, server_url=args.server_url)
+    api_client = ScalyrAPIClient(api_token=api_token, server_url=server_url)
 
     # Create query generator
     llm_provider = args.llm if args.llm != "none" else None
 
     # Create the query generator with model name if provided
-    query_generator = ScalyrQueryGenerator(api_client, llm_provider, args.model)
+    try:
+        query_generator = ScalyrQueryGenerator(api_client, llm_provider, args.model)
+    except Exception as e:
+        print(f"Error initializing query generator: {e}")
+        print("Make sure you have the correct API keys set in your .env file")
+        sys.exit(1)
 
     # Run in interactive mode if requested
     if args.interactive:
@@ -249,24 +266,28 @@ def main():
 
     # Otherwise, process the query from command line
     if not args.query:
-        print("Error: No query provided. Use --interactive for interactive mode.")
+        print("Error: No query provided")
         sys.exit(1)
 
-    # Generate the query
-    result = query_generator.generate_query(args.query, args.dataset)
+    try:
+        # Generate query
+        result = query_generator.generate_query(args.query, args.dataset)
 
-    # Format and print the result
-    print(format_query_result(result, args.output))
+        # Format and print result
+        print(format_query_result(result, args.output))
 
-    # Save to file if requested
-    if args.save:
-        save_query_to_file(result, args.save)
+        # Save to file if requested
+        if args.save:
+            save_query_to_file(result, args.save)
 
-    # Execute the query if requested
-    if args.execute:
-        execution_result = execute_query(api_client, result)
-        print("\nExecution Result:")
-        print(json.dumps(execution_result, indent=2))
+        # Execute query if requested
+        if args.execute:
+            execution_result = execute_query(api_client, result)
+            print("\nExecution Result:")
+            print(json.dumps(execution_result, indent=2))
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
